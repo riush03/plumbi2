@@ -4,11 +4,11 @@ import { EmptyPipe,FilledPipe,EmptyToFilledPipe,DirectionPipe } from './constant
 import { Level } from './constants/levels.js';
 import { rotatePipe } from './utils/rotatePipe.js';
 import { Leaderboard } from './components/Leaderboard.js';
-import { Icons } from './constants/icon.js';
 
 Devvit.configure({
   redditAPI: true,
   redis: true,
+  media: true,
 });
 
 // Add a menu item to the subreddit menu for instantiating the new experience post
@@ -46,12 +46,18 @@ Devvit.addCustomPostType({
     const [gameBoard, setGameBoard] = useState<EmptyPipe[][]>(() => {
       return initializeGameBoard(currentLevelIndex);
     });
+    const [filledPipeGameBoard, setFilledPipeGameBoard] = useState<FilledPipe[][]>(() => {
+      return gameBoard.map(row => 
+        row.map(pipe => convertToFilledPipe(pipe))
+      );
+    });
+    const [filledPipes, setFilledPipes] = useState<boolean[][]>(() => 
+     Array(gameBoard.length).fill(Array(gameBoard[0].length).fill(false))
+    );
     const [pipeAngles, setPipeAngles] = useState<number[][]>(() => {
       return gameBoard.map(row => row.map(() => 0));
     });
-    const [filledPipes, setFilledPipes] = useState<boolean[][]>(() => {
-      return gameBoard.map(row => row.map(() => false));
-    });
+    
     const [showCongrats, setShowCongrats] = useState(false);
 
     const currentLevel: Level = levels[currentLevelIndex];
@@ -157,28 +163,37 @@ const timerInterval = useInterval(() => {
       );
     }
 
-
     function handlePipeRotation(x: number, y: number) {
       setGameBoard(prevBoard => {
         const newBoard = prevBoard.map(row => [...row]);
         newBoard[y][x] = rotatePipe(newBoard[y][x]);
+        
+        // Check if the solution is correct after rotation
+        if (checkSolution(newBoard)) {
+          setShowCongrats(true);
+          
+          // Instead of converting to FilledPipe, we'll use a separate state to track filled pipes
+          setFilledPipes(prevFilled => {
+            const newFilled = prevFilled.map(row => [...row]);
+            newFilled[y][x] = true;
+            return newFilled;
+          });
+        }
+        
         return newBoard;
       });
+      
       setPipeAngles(prevAngles => {
         const newAngles = prevAngles.map(row => [...row]);
         newAngles[y][x] = (newAngles[y][x] + 90) % 360;
         return newAngles;
       });
-      
-      if (checkSolution()) {
-        setShowCongrats(true);
-      }
     }
 
-    function checkSolution(): boolean {
+    function checkSolution(board: EmptyPipe[][]): boolean {
       const currentLevel = levels[currentLevelIndex];
       if (!currentLevel || !currentLevel.map) return false;
-      return gameBoard.every((row, y) => 
+      return board.every((row, y) => 
         row.every((pipe, x) => pipe === currentLevel.map[y][x])
       );
     }
@@ -188,6 +203,22 @@ const timerInterval = useInterval(() => {
       const char = map[y][x];
       if (char in DirectionPipe) return char;
       return null;
+    };
+
+    const checkForPath = (map: string[], x: number, y: number, direction: string, visited: boolean[][]): boolean => {
+      if (y < 0 || y >= map.length || x < 0 || x >= map[y].length) return false;
+      if (visited[y][x]) return false;
+      visited[y][x] = true;
+    
+      const char = map[y][x];
+      if (char === 'S' || char === 'F') return true;
+      if (char in DirectionPipe) {
+        if (char === direction) {
+          return checkForPath(map, x + (direction === '═' ? 1 : 0), y + (direction === '║' ? 1 : 0), direction, visited);
+        }
+        return false;
+      }
+      return false;
     };
 
     async function nextLevel(context: Devvit.Context, username: string) {
@@ -205,35 +236,46 @@ const timerInterval = useInterval(() => {
       }
     };
 
-    const handleDoneClick = () => {
-      if (checkSolution()) {
-        setShowCongrats(true);
-        timerInterval.stop(); // Stop the timer when the level is completed
-      } else {
-        context.ui.showToast('The pipes are not correctly connected. Try again!');
-      }
-    };
 
     function renderPipe(pipe: EmptyPipe, angle: number, x: number, y: number) {
-      const isConnected = pipe === levels[currentLevelIndex].map[y][x];
-      const imageUrl = context.assets.getURL(`pipes/${pipe}.png`);
+      const isFilled = filledPipes[y][x];
+      const pipeType = isFilled ? convertToFilledPipe(pipe) : pipe;
+      const imageUrl = context.assets.getURL(`pipes/${pipeType}.png`);
+      
       return (
         <zstack>
-            <image
-              url={imageUrl}
-              imageWidth={60 * currentLevel.scale}
-              imageHeight={60 * currentLevel.scale}
-              onPress={() => handlePipeRotation(x, y)}
-            />
-           {isConnected && (
-           <vstack
-            backgroundColor="rgba(0, 0, 255, 0.5)"
-            width={60 * currentLevel.scale}
-            height={60 * currentLevel.scale}
+          <image
+            url={imageUrl}
+            imageWidth={60 * currentLevel.scale}
+            imageHeight={60 * currentLevel.scale}
+            onPress={() => handlePipeRotation(x, y)}
           />
-      )}
+          {isFilled && (
+            <vstack
+              backgroundColor="rgba(0, 0, 255, 0.5)"
+              width={60 * currentLevel.scale}
+              height={60 * currentLevel.scale}
+            />
+          )}
         </zstack>
       );
+    }
+    
+    function convertToFilledPipe(pipe: EmptyPipe): FilledPipe {
+      switch (pipe) {
+        case EmptyPipe['═']: return FilledPipe['━'];
+        case EmptyPipe['║']: return FilledPipe['┃'];
+        case EmptyPipe['╔']: return FilledPipe['┏'];
+        case EmptyPipe['╗']: return FilledPipe['┓'];
+        case EmptyPipe['╚']: return FilledPipe['┗'];
+        case EmptyPipe['╝']: return FilledPipe['┛'];
+        case EmptyPipe['╠']: return FilledPipe['┣'];
+        case EmptyPipe['╣']: return FilledPipe['┫'];
+        case EmptyPipe['╦']: return FilledPipe['┳'];
+        case EmptyPipe['╩']: return FilledPipe['┻'];
+        case EmptyPipe['╬']: return FilledPipe['╋'];
+        default: return pipe as unknown as FilledPipe;
+      }
     }
 
     const Instructions = () => (
@@ -251,14 +293,15 @@ const timerInterval = useInterval(() => {
           </button>
         </vstack>
       );
-  
+
       const WelcomePage = () => (
-        <vstack gap="small" alignment="center middle" height="100%" padding="medium">
-          <image url="plumbilogo.png" imageWidth={150} imageHeight={150} />
-          <text size="small" alignment="center" width="80%">
+        <vstack gap="small" alignment="center top" height="100%" padding="small">
+          <image url="plumbilogo.png" imageWidth={1200} imageHeight={100} />
+          <text size="small" weight="bold" alignment="center" width="90%">
             Connect pipes to solve levels. Tap to rotate pipes and create a path from start to finish!
           </text>
-          <vstack gap="small">
+          <spacer size="small" />
+          <vstack gap='medium' width="100%" alignment="center middle">
             <button
               appearance="primary"
               size="medium"
@@ -268,7 +311,7 @@ const timerInterval = useInterval(() => {
               Play Game
             </button>
             <button
-              appearance="secondary"
+              appearance="bordered"
               size="medium"
               icon="info"
               onPress={() => setShowInstructions(true)}
@@ -276,7 +319,7 @@ const timerInterval = useInterval(() => {
               Instructions
             </button>
             <button
-              appearance="secondary"
+              appearance="bordered"
               size="medium"
               onPress={() => {
                 setShowLeaderboard(!showLeaderboard);
@@ -285,9 +328,10 @@ const timerInterval = useInterval(() => {
               {showLeaderboard ? "Hide Leaderboard" : "Show Leaderboard"}
             </button>
           </vstack>
+          <spacer grow />
         </vstack>
       );
-  
+
       const GamePage = () => (
         <vstack gap="medium" alignment="center middle">
           <vstack 
@@ -304,13 +348,7 @@ const timerInterval = useInterval(() => {
               cornerRadius="medium"
               width="100%"
             >
-              <spacer grow />
-              <button 
-                onPress={handleDoneClick}
-                textColor="white"
-              >
-                Done
-              </button>
+          
               <spacer grow />
               <text size="xlarge" weight="bold" color="white">Level {currentLevelIndex + 1}</text>
               <spacer grow />
@@ -379,7 +417,7 @@ const timerInterval = useInterval(() => {
       );
   
       return (
-        <vstack height="100%" backgroundColor="LightBlue-100">
+        <vstack height="100%" backgroundColor="AlienBlue-50">
           {showInstructions ? (
             <Instructions />
           ) : showGame ? (
@@ -389,8 +427,9 @@ const timerInterval = useInterval(() => {
           ) : (
             <WelcomePage />
           )}
-          <hstack padding="small">
+          <hstack padding="small" alignment="center middle" >
             <button
+              appearance="bordered"
               onPress={() => {
                 setShowInstructions(false);
                 setShowGame(false);
@@ -399,6 +438,7 @@ const timerInterval = useInterval(() => {
             >
               {showLeaderboard ? "Hide Leaderboard" : "Show Leaderboard"}
             </button>
+          
           </hstack>
         </vstack>
       );
